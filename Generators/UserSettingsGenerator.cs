@@ -22,7 +22,8 @@ public class UserSettingsGenerator : ISourceGenerator
         if (settingsData is null)
             throw new Exception("Could not find UserSettingsData found in \"GenerationConstants.UserSettingsData\".");
 
-        var results = RecursiveSearchForValidOptions(settingsData.GetMembers().ToArray());
+        ISymbol[] members = settingsData.GetMembers().ToArray();
+        var results = RecursiveSearchForValidOptions(members);
         string settingsNameSpace = settingsData.GetNamespaceName();
 
         StringBuilder dataClass = new StringBuilder();
@@ -40,7 +41,7 @@ public class UserSettingsGenerator : ISourceGenerator
 
         foreach (var result in results)
         {
-            if (!result.pathTo.Contains('.'))
+            if (!result.pathTo.Contains('.') || result.isClass)
                 continue;
 
             string section = result.pathTo.Substring(0, result.pathTo.IndexOf('.'));
@@ -61,7 +62,7 @@ public class UserSettingsGenerator : ISourceGenerator
 
         foreach (var result in results)
         {
-            if (!result.pathTo.Contains('.'))
+            if (!result.pathTo.Contains('.') || result.isClass)
                 continue;
 
             string section = result.pathTo.Substring(0, result.pathTo.IndexOf('.'));
@@ -84,7 +85,7 @@ public class UserSettingsGenerator : ISourceGenerator
 
         foreach (var result in results)
         {
-            if (!result.pathTo.Contains('.'))
+            if (!result.pathTo.Contains('.') || result.isClass)
                 continue;
 
             dataClass.Append($"\t\t\tcase \"{result.pathTo.Replace('.', '/')}\":\n");
@@ -106,7 +107,7 @@ public class UserSettingsGenerator : ISourceGenerator
 
         foreach (var result in results)
         {
-            if (!result.pathTo.Contains('.'))
+            if (!result.pathTo.Contains('.') || result.isClass)
                 continue;
 
             dataClass.Append($"\t\t\tcase \"{result.pathTo.Replace('.', '/')}\":\n");
@@ -119,8 +120,36 @@ public class UserSettingsGenerator : ISourceGenerator
         }
 
         dataClass.Append("\t\t}\n" +
-                         "\t}\n" +
-                         "}");
+                         "\t}\n\n");
+        
+        // Make constructor
+        dataClass.Append($"\tpublic {settingsData.Name}()\n" +
+                                  "\t{\n");
+        
+        foreach (var result in results)
+        {
+            string typeFullName = result.type.ToDisplayString();
+            if (!result.isClass)
+                continue;
+
+            dataClass.Append($"\t\t{result.pathTo} = new {typeFullName}();\n");
+        }
+        
+        dataClass.Append("\n");
+
+        foreach (var result in results)
+        {
+            if (string.IsNullOrWhiteSpace(result.projectSetting) || result.isClass)
+                continue;
+            
+            dataClass.Append($"\t\t{result.pathTo} = ({result.type.ToDisplayString()})ProjectSettings.GetSetting(\"{result.projectSetting}\")");
+            if (result.type.TypeKind == TypeKind.Enum)
+                dataClass.Append(".AsInt64()");
+            
+            dataClass.Append(";\n");
+        }
+        
+        dataClass.Append("\t}\n}");
 
         context.AddSource($"{settingsData.Name}.rg.cs", dataClass.ToString());
         #endregion
@@ -274,7 +303,7 @@ public class UserSettingsGenerator : ISourceGenerator
         #endregion
     }
 
-    private (string pathTo, ITypeSymbol type)[] RecursiveSearchForValidOptions(ISymbol[] symbols)
+    private (string pathTo, ITypeSymbol type, string? projectSetting, bool isClass)[] RecursiveSearchForValidOptions(ISymbol[] symbols)
     {
         IPropertySymbol[] properties = symbols
             .Where(x => x.Kind is SymbolKind.Property && x is { IsStatic: false, DeclaredAccessibility: Accessibility.Public })
@@ -288,43 +317,64 @@ public class UserSettingsGenerator : ISourceGenerator
             .Where(x => !x.IsImplicitlyDeclared)
             .ToArray();
 
-        List<(string pathTo, ITypeSymbol type)> results = new();
+        List<(string pathTo, ITypeSymbol type, string? projectSetting, bool isClass)> results = new();
         foreach (IPropertySymbol property in properties)
         {
             string typeFullName = property.Type.ToDisplayString();
-            if (property.Type.TypeKind is TypeKind.Class
-                && !typeFullName.Contains("Godot.Collections.Array")
-                && !typeFullName.Contains("Godot.Collections.Dictionary"))
+            bool isClass = property.Type.TypeKind is TypeKind.Class
+                           && !typeFullName.Contains("Godot.Collections.Array")
+                           && !typeFullName.Contains("Godot.Collections.Dictionary");
+            if (isClass)
             {
+                results.Add((property.Name, property.Type, null, true));
+                
                 var propertyResults =
                     RecursiveSearchForValidOptions(property.Type.GetMembers().ToArray());
 
                 foreach (var result in propertyResults)
-                    results.Add((property.Name + "." + result.pathTo, result.type));
+                    results.Add((property.Name + "." + result.pathTo, result.type, result.projectSetting, result.isClass));
 
                 continue;
             }
 
-            results.Add((property.Name, property.Type));
+            AttributeData? projectSettingAttr = property.GetAttributes().FirstOrDefault(x => x.AttributeClass?.IsProjectSettingAttribute() ?? false);
+            if (projectSettingAttr != null)
+            {
+                results.Add((property.Name, property.Type, projectSettingAttr.ConstructorArguments[0].Value?.ToString(), false));
+                continue;
+            }
+            
+            results.Add((property.Name, property.Type, null, false));
         }
 
         foreach (IFieldSymbol field in fields)
         {
             string typeFullName = field.Type.ToDisplayString();
-            if (field.Type.TypeKind is TypeKind.Class && !typeFullName.Contains("Godot.Collections.Array") && !typeFullName.Contains("Godot.Collections.Dictionary"))
+            bool isClass = field.Type.TypeKind is TypeKind.Class && !typeFullName.Contains("Godot.Collections.Array") &&
+                           !typeFullName.Contains("Godot.Collections.Dictionary");
+            if (isClass)
             {
+                results.Add((field.Name, field.Type, null, true));
+                
                 var fieldResults =
                     RecursiveSearchForValidOptions(field.Type.GetMembers().ToArray());
 
                 foreach (var result in fieldResults)
-                    results.Add((field.Name + "." + result.pathTo, result.type));
+                    results.Add((field.Name + "." + result.pathTo, result.type, result.projectSetting, result.isClass));
 
                 continue;
             }
+            
+            AttributeData? projectSettingAttr = field.GetAttributes().FirstOrDefault(x => x.AttributeClass?.IsProjectSettingAttribute() ?? false);
+            if (projectSettingAttr != null)
+            {
+                results.Add((field.Name, field.Type, projectSettingAttr.ConstructorArguments[0].Value?.ToString(), false));
+                continue;
+            }
 
-            results.Add((field.Name, field.Type));
+            results.Add((field.Name, field.Type, null, false));
         }
-
+        
         return results.ToArray();
     }
 }

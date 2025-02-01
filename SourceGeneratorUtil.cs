@@ -110,4 +110,6 @@ public static class SourceGeneratorUtil
     public static bool IsStaticAutoloadAttribute(this INamedTypeSymbol symbol) => symbol.FullQualifiedNameOmitGlobal() == GenerationConstants.StaticAutoloadAttr;
 
     public static bool IsGodotSignalAttribute(this INamedTypeSymbol symbol) => symbol.FullQualifiedNameOmitGlobal() == GenerationConstants.SignalAttr;
+    
+    public static bool IsProjectSettingAttribute(this INamedTypeSymbol symbol) => symbol.FullQualifiedNameOmitGlobal() == GenerationConstants.ProjectSettingAttr;
 }
