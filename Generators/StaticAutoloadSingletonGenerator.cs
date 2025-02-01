@@ -55,7 +55,19 @@ public class StaticAutoloadSingletonGenerator : ISourceGenerator
                           $"public static partial class {className}\n" +
                           "{\n" +
                           $"\t/// <summary>\n\t/// The current global instance of <see cref=\"{symbol.Name}\"/>.\n\t/// </summary>\n" +
-                          $"\tpublic static {symbol.Name} Singleton => Engine.GetMainLoop() is SceneTree tree ? tree.Root.GetNode<{symbol.Name}>(\"{className}\") : null;\n\n");
+                          $"\tpublic static {symbol.Name} Singleton\n" +
+                          "\t{\n" +
+                          "\t\tget\n" +
+                          "\t\t{\n" +
+                          "\t\t\tif (_singleton is not null)\n" +
+                          "\t\t\t\treturn _singleton;\n" +
+                          "\t\t\t\n" +
+                          $"\t\t\t_singleton = Engine.GetMainLoop() is SceneTree tree ? tree.Root.GetNode<{symbol.Name}>(\"{className}\") : null;\n" +
+                          "\t\t\treturn _singleton;\n" +
+                          "\t\t}\n" +
+                          "\t}\n" +
+                          "\n" +
+                          $"\tprivate static {symbol.Name} _singleton;\n\n");
 
         ImmutableArray<ISymbol> members = symbol.GetMembers();
 
@@ -228,7 +240,6 @@ public class StaticAutoloadSingletonGenerator : ISourceGenerator
 
         finalClass.Remove(finalClass.Length - 1, 1);
         finalClass.Append("}");
-
         
         StringBuilder usingsText = new();
         foreach (string usingDirective in allUsings)
@@ -237,6 +248,6 @@ public class StaticAutoloadSingletonGenerator : ISourceGenerator
 
         //throw new Exception((usingsText.ToString() + finalClass.ToString()).Replace("\n", "").Replace("\t", ""));
 
-        context.AddSource($"{className}.RubiconGenerated.cs", usingsText + finalClass.ToString());
+        context.AddSource($"{className}.rg.cs", usingsText + finalClass.ToString());
     }
 }
