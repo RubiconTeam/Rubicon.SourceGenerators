@@ -195,7 +195,11 @@ public class StaticAutoloadSingletonGenerator : ISourceGenerator
                 if (!string.IsNullOrEmpty(paramNameSpace) && paramNameSpace != nameSpace && !allUsings.Contains(paramNameSpace))
                     allUsings.Add(paramNameSpace);   
                 
-                finalClass.Append($"{parameter.Type.ToDisplayString()} {parameter.Name}");
+                string parameterName = parameter.Name;
+                if (GenerationConstants.Keywords.Contains(parameterName))
+                    parameterName = "@" + parameterName;
+                
+                finalClass.Append($"{parameter.Type.ToDisplayString()} {parameterName}");
 
                 if (parameter.HasExplicitDefaultValue)
                     finalClass.Append($" = {parameter.ExplicitDefaultValue ?? "null"}");
@@ -203,13 +207,17 @@ public class StaticAutoloadSingletonGenerator : ISourceGenerator
                 if (i < parameters.Length - 1)
                     finalClass.Append(", ");
             }
-
+            
             finalClass.Append($") => Singleton.{method.Name}(");
             
             for (int i = 0; i < parameters.Length; i++)
             {
                 IParameterSymbol parameter = parameters[i];
-                finalClass.Append($"{parameter.Name}");
+                string parameterName = parameter.Name;
+                if (GenerationConstants.Keywords.Contains(parameterName))
+                    parameterName = "@" + parameterName;
+                
+                finalClass.Append($"{parameterName}");
 
                 if (i < parameters.Length - 1)
                     finalClass.Append(", ");
