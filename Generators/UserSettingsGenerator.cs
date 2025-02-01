@@ -120,7 +120,62 @@ public class UserSettingsGenerator : ISourceGenerator
         }
 
         dataClass.Append("\t\t}\n" +
-                         "\t}\n\n");
+                         "\t}\n" +
+                         "\n" +
+                         "\tpublic partial string[] GetSections()\n" +
+                         "\t{\n" +
+                         "\t\treturn [");
+        
+        // Make GetSections
+        for (int i = 0; i < results.Length; i++)
+        {
+            var result = results[i];
+            if (!result.isClass || result.isClass && result.pathTo.Contains('.'))
+                continue;
+            
+            dataClass.Append($"\"{result.pathTo}\", ");
+        }
+
+        dataClass.Append("];\n" +
+                         "\t}\n" +
+                         "\n" +
+                         "\tpublic partial string[] GetSectionKeys(string section)\n" +
+                         "\t{\n" +
+                         "\t\tswitch (section)\n" +
+                         "\t\t{\n");
+        
+        // Make GetSectionKeys
+        Dictionary<string, List<string>> sectionKeyMap = new Dictionary<string, List<string>>();
+        foreach (var result in results)
+        {
+            if (result.isClass)
+                continue;
+            
+            string section = result.pathTo.Substring(0, result.pathTo.IndexOf('.'));
+            string key = result.pathTo.Substring(result.pathTo.IndexOf('.') + 1).Replace('.', '/');
+            if (!sectionKeyMap.ContainsKey(section))
+                sectionKeyMap[section] = new List<string>();
+            
+            sectionKeyMap[section].Add(key);
+        }
+
+        foreach (string section in sectionKeyMap.Keys)
+        {
+            dataClass.Append($"\t\t\tcase \"{section}\":\n" +
+                             "\t\t\t\treturn [");
+
+            foreach (string key in sectionKeyMap[section])
+            {
+                //throw new Exception($"MARKER {key} {section}");
+                dataClass.Append($"\"{key}\", ");   
+            }
+            
+            dataClass.Append("];\n");
+        }
+
+        dataClass.Append("\t\t\tdefault:\n" +
+                         "\t\t\t\treturn [];\n" +
+                         "\t\t}\n\t}\n\n");
         
         // Make constructor
         dataClass.Append($"\tpublic {settingsData.Name}()\n" +
