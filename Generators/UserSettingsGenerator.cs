@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
+using Rubicon.SourceGenerators.Data;
 
 namespace Rubicon.SourceGenerators;
 
@@ -29,6 +30,7 @@ public class UserSettingsGenerator : ISourceGenerator
         StringBuilder dataClass = new StringBuilder();
         dataClass.Append("using Godot;\n" +
                          "using Godot.Collections;\n" +
+                         "using Rubicon.Core.Data;\n" +
                          "\n" +
                          $"namespace {settingsNameSpace};\n" +
                          "\n" +
@@ -204,8 +206,41 @@ public class UserSettingsGenerator : ISourceGenerator
             dataClass.Append(";\n");
         }
         
-        dataClass.Append("\t}\n}");
+        // GetAttributeForSetting
+        dataClass.Append("\t}\n" +
+                         "\n" +
+                         "\tpublic partial AttributeData[] GetAttributesForSetting(string key)\n" +
+                         "\t{\n" +
+                         "\t\tswitch (key)\n" +
+                         "\t\t{\n");
 
+        foreach (var result in results)
+        {
+            if (result.attributeData.Length == 0)
+                continue;
+
+            string key = result.pathTo.Replace('.', '/');
+            dataClass.Append($"\t\t\tcase \"{key}\":\n" +
+                             "\t\t\t\treturn [");
+            for (int i = 0; i < result.attributeData.Length; i++)
+            {
+                UserSettingsAttribute attribute = result.attributeData[i];
+                dataClass.Append($"new AttributeData(\"{attribute.Name}\", ");
+                for (int j = 0; j < attribute.Parameters.Length; j++)
+                    dataClass.Append($"\"{attribute.Parameters[j]}\"" + (j != attribute.Parameters.Length - 1 ? ", " : ""));
+
+                dataClass.Append(")" + (i != result.attributeData.Length - 1 ? ", " : ""));
+            }
+            
+            dataClass.Append("];\n");
+        }
+
+        dataClass.Append("\t\t}\n" +
+                         "\n" +
+                         "\t\treturn null;\n" +
+                         "\t}\n" +
+                         "}");
+        
         context.AddSource($"{settingsData.Name}.rg.cs", dataClass.ToString());
         #endregion
 
@@ -358,7 +393,7 @@ public class UserSettingsGenerator : ISourceGenerator
         #endregion
     }
 
-    private (string pathTo, ITypeSymbol type, string? projectSetting, bool isClass)[] RecursiveSearchForValidOptions(ISymbol[] symbols)
+    private (string pathTo, ITypeSymbol type, string? projectSetting, bool isClass, UserSettingsAttribute[] attributeData)[] RecursiveSearchForValidOptions(ISymbol[] symbols)
     {
         IPropertySymbol[] properties = symbols
             .Where(x => x.Kind is SymbolKind.Property && x is { IsStatic: false, DeclaredAccessibility: Accessibility.Public })
@@ -372,7 +407,7 @@ public class UserSettingsGenerator : ISourceGenerator
             .Where(x => !x.IsImplicitlyDeclared)
             .ToArray();
 
-        List<(string pathTo, ITypeSymbol type, string? projectSetting, bool isClass)> results = new();
+        List<(string pathTo, ITypeSymbol type, string? projectSetting, bool isClass, UserSettingsAttribute[] attributeData)> results = new();
         foreach (IPropertySymbol property in properties)
         {
             string typeFullName = property.Type.ToDisplayString();
@@ -381,25 +416,39 @@ public class UserSettingsGenerator : ISourceGenerator
                            && !typeFullName.Contains("Godot.Collections.Dictionary");
             if (isClass)
             {
-                results.Add((property.Name, property.Type, null, true));
+                results.Add((property.Name, property.Type, null, true, []));
                 
                 var propertyResults =
                     RecursiveSearchForValidOptions(property.Type.GetMembers().ToArray());
 
                 foreach (var result in propertyResults)
-                    results.Add((property.Name + "." + result.pathTo, result.type, result.projectSetting, result.isClass));
+                    results.Add((property.Name + "." + result.pathTo, result.type, result.projectSetting, result.isClass, result.attributeData));
 
                 continue;
             }
 
-            AttributeData? projectSettingAttr = property.GetAttributes().FirstOrDefault(x => x.AttributeClass?.IsProjectSettingAttribute() ?? false);
+            List<UserSettingsAttribute> attributeData = new List<UserSettingsAttribute>();
+            ImmutableArray<AttributeData> attributes = property.GetAttributes();
+            for (int i = 0; i < attributes.Length; i++)
+            {
+                AttributeData attribute = attributes[i];
+                UserSettingsAttribute attr = new UserSettingsAttribute { Name = attribute.AttributeClass.FullQualifiedNameOmitGlobal() };
+                List<string> parameters = new List<string>();
+                for (int j = 0; j < attribute.ConstructorArguments.Length; j++)
+                    parameters.Add(attribute.ConstructorArguments[j].Value.ToString());
+                
+                attr.Parameters = parameters.ToArray();
+                attributeData.Add(attr);
+            }
+
+            AttributeData? projectSettingAttr = attributes.FirstOrDefault(x => x.AttributeClass?.IsProjectSettingAttribute() ?? false);
             if (projectSettingAttr != null)
             {
-                results.Add((property.Name, property.Type, projectSettingAttr.ConstructorArguments[0].Value?.ToString(), false));
+                results.Add((property.Name, property.Type, projectSettingAttr.ConstructorArguments[0].Value?.ToString(), false, attributeData.ToArray()));
                 continue;
             }
             
-            results.Add((property.Name, property.Type, null, false));
+            results.Add((property.Name, property.Type, null, false, attributeData.ToArray()));
         }
 
         foreach (IFieldSymbol field in fields)
@@ -409,25 +458,39 @@ public class UserSettingsGenerator : ISourceGenerator
                            !typeFullName.Contains("Godot.Collections.Dictionary");
             if (isClass)
             {
-                results.Add((field.Name, field.Type, null, true));
+                results.Add((field.Name, field.Type, null, true, []));
                 
                 var fieldResults =
                     RecursiveSearchForValidOptions(field.Type.GetMembers().ToArray());
 
                 foreach (var result in fieldResults)
-                    results.Add((field.Name + "." + result.pathTo, result.type, result.projectSetting, result.isClass));
+                    results.Add((field.Name + "." + result.pathTo, result.type, result.projectSetting, result.isClass, result.attributeData));
 
                 continue;
             }
             
-            AttributeData? projectSettingAttr = field.GetAttributes().FirstOrDefault(x => x.AttributeClass?.IsProjectSettingAttribute() ?? false);
+            List<UserSettingsAttribute> attributeData = new List<UserSettingsAttribute>();
+            ImmutableArray<AttributeData> attributes = field.GetAttributes();
+            for (int i = 0; i < attributes.Length; i++)
+            {
+                AttributeData attribute = attributes[i];
+                UserSettingsAttribute attr = new UserSettingsAttribute { Name = attribute.AttributeClass.FullQualifiedNameOmitGlobal() };
+                List<string> parameters = new List<string>();
+                for (int j = 0; j < attribute.ConstructorArguments.Length; j++)
+                    parameters.Add(attribute.ConstructorArguments[j].Value.ToString());
+                
+                attr.Parameters = parameters.ToArray();
+                attributeData.Add(attr);
+            }
+            
+            AttributeData? projectSettingAttr = attributes.FirstOrDefault(x => x.AttributeClass?.IsProjectSettingAttribute() ?? false);
             if (projectSettingAttr != null)
             {
-                results.Add((field.Name, field.Type, projectSettingAttr.ConstructorArguments[0].Value?.ToString(), false));
+                results.Add((field.Name, field.Type, projectSettingAttr.ConstructorArguments[0].Value?.ToString(), false, attributeData.ToArray()));
                 continue;
             }
 
-            results.Add((field.Name, field.Type, null, false));
+            results.Add((field.Name, field.Type, null, false, attributeData.ToArray()));
         }
         
         return results.ToArray();
